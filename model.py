@@ -1736,3 +1736,32 @@ def retrieval_eval(model, vocab, corpus, pairs, dim=None, k=10):
         # Restore the model's original training/evaluation mode.
         model.train(was_training)
 
+# Step 20 - fake_quantize_model
+def fake_quantize_model(model, bits=8):
+    # Work on a deep copy so the original model remains unchanged.
+    quantized_model = copy.deepcopy(model)
+
+    # Maximum positive integer representable by symmetric quantization.
+    qmax = 2 ** (bits - 1) - 1
+
+    with torch.no_grad():
+        for name, param in quantized_model.named_parameters():
+            # Quantize only parameters with at least two dimensions.
+            # One-dimensional parameters, such as RMSNorm scales,
+            # remain unchanged.
+            if param.ndim < 2:
+                continue
+
+            # Symmetric per-row quantization along the last dimension.
+            row_max = param.abs().amax(dim=-1, keepdim=True)
+            scale = row_max.clamp(min=1e-8) / qmax
+
+            # Quantize to integer levels and dequantize back to
+            # the parameter's original floating-point dtype.
+            quantized = torch.round(param / scale).clamp(
+                -qmax, qmax
+            )
+            param.copy_((quantized * scale).to(param.dtype))
+
+    return quantized_model
+

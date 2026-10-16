@@ -29,6 +29,7 @@ python scaffold.py
 - [x] **17.** train_embedder
 - [x] **18.** uniform_soup
 - [x] **19.** retrieval_eval
+- [x] **20.** fake_quantize_model
 
 ---
 
