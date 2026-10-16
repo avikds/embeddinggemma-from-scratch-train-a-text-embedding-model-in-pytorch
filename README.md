@@ -19,6 +19,7 @@ python scaffold.py
 - [x] **7.** TransformerBlock
 - [x] **8.** TinyLM
 - [x] **9.** pretrain_lm
+- [x] **10.** adapt_encoder
 
 ---
 

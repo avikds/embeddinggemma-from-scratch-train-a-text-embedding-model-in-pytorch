@@ -865,3 +865,108 @@ def synonym_cosine(model, vocab, world):
 
     return round(sum(similarities) / len(similarities), 4)
 
+# Step 10 - adapt_encoder
+def adapt_encoder(
+    model,
+    world,
+    vocab,
+    steps,
+    rng,
+    batch_size=64,
+    lr=5e-4,
+    mask_rate=0.3,
+    syn_rate=0.3,
+):
+    # AdamW optimizer with the required weight decay.
+    optimizer = torch.optim.AdamW(
+        model.parameters(),
+        lr=lr,
+        weight_decay=0.1,
+    )
+
+    # Use a separate Torch generator for deterministic masking.
+    generator = torch.Generator()
+    generator.manual_seed(rng.randrange(1 << 30))
+
+    # Store one floating-point loss per training step.
+    losses = []
+
+    # Use the same device as the model parameters.
+    device = next(model.parameters()).device
+
+    model.train()
+
+    for _ in range(steps):
+        # Generate a fresh batch of pretraining-stream documents.
+        documents = pretraining_stream(
+            world,
+            rng,
+            batch_size,
+            syn_rate=syn_rate,
+        )
+
+        # Encode each document with the [D] prefix.
+        sequences = [
+            vocab.encode(doc["tokens"], "doc")
+            for doc in documents
+        ]
+
+        # Pad sequences and obtain a mask for real tokens.
+        ids, mask = vocab.collate(sequences)
+
+        ids = ids.to(device)
+        mask = mask.to(device)
+
+        # Preserve original token IDs as reconstruction targets.
+        targets = ids.clone()
+
+        # Randomly select positions for masked denoising.
+        # The generator uses a fixed seed derived from rng.
+        random_values = torch.rand(
+            ids.shape,
+            generator=generator,
+        ).to(device)
+
+        corrupt = random_values < mask_rate
+
+        # Only corrupt real tokens, never padding or the [D] prefix.
+        corrupt = (
+            corrupt
+            & mask.bool()
+            & (ids != vocab.d)
+        )
+
+        # Replace selected input tokens with [MASK].
+        corrupted_ids = ids.clone()
+        corrupted_ids[corrupt] = vocab.mask_id
+
+        # Full bidirectional attention: keys are restricted only
+        # by padding, rather than by a causal mask.
+        allowed = padding_allowed(mask)
+
+        # Compute hidden states for the corrupted sequences.
+        optimizer.zero_grad()
+
+        hidden = model.hidden(corrupted_ids, allowed)
+
+        # Use the tied token embedding matrix for reconstruction.
+        logits = hidden @ model.tok.weight.T
+
+        # Calculate cross-entropy only at corrupted positions.
+        if corrupt.any():
+            loss = torch.nn.functional.cross_entropy(
+                logits[corrupt],
+                targets[corrupt],
+            )
+
+            loss.backward()
+            optimizer.step()
+
+            losses.append(float(loss.detach().cpu().item()))
+        else:
+            # A batch can exceptionally contain no selected tokens.
+            # Record a finite loss and leave the model unchanged.
+            losses.append(0.0)
+
+    return losses
+
