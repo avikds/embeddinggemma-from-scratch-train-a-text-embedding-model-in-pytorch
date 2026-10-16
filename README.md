@@ -31,6 +31,7 @@ python scaffold.py
 - [x] **19.** retrieval_eval
 - [x] **20.** fake_quantize_model
 - [x] **21.** build_experiment
+- [x] **22.** embedding_experiment
 
 ---
 

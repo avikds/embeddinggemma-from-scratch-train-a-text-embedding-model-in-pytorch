@@ -1884,3 +1884,272 @@ def train_variant(ex, init, pairs, seed=3, steps=200, **kw):
 
     return model, losses
 
+# Step 22 - embedding_experiment
+def embedding_experiment(seed=0, steps=200, lm_steps=300, adapt_steps=200):
+    # --------------------------------------------------
+    # 1. Build the corpus, vocabulary, and query datasets.
+    # --------------------------------------------------
+    ex = build_experiment(seed=seed)
+
+    world = ex["world"]
+    corpus = ex["corpus"]
+    vocab = ex["vocab"]
+
+    lexical = ex["lexical"]
+    semantic = ex["semantic"]
+    eval_syn = ex["eval_syn"]
+    eval_lex = ex["eval_lex"]
+
+    n_docs = len(corpus)
+    n_topics = len(world["topics"])
+
+    # --------------------------------------------------
+    # 2. Evaluate the BM25 lexical-retrieval baseline.
+    # Build the index only once.
+    # --------------------------------------------------
+    bm25_idx = bm25_index(corpus)
+
+    def bm25_rank_fn(query_words):
+        return bm25_rank(
+            query_words,
+            corpus,
+            index=bm25_idx,
+        )
+
+    bm25_results = {
+        "syn": evaluate_ranker(bm25_rank_fn, eval_syn),
+        "lex": evaluate_ranker(bm25_rank_fn, eval_lex),
+    }
+
+    # --------------------------------------------------
+    # 3. Pretrain the language model and adapt the encoder.
+    # --------------------------------------------------
+    lm, adapted, lm_losses, adapt_losses = pretrain_and_adapt(
+        ex,
+        lm_steps=lm_steps,
+        adapt_steps=adapt_steps,
+        seed=seed,
+    )
+
+    # Create an independently initialized random baseline LM.
+    torch.manual_seed(seed + 1)
+    random_lm = TinyLM(len(vocab))
+
+    lm_results = {
+        "loss_first": float(lm_losses[0]) if lm_losses else 0.0,
+        "loss_last": float(lm_losses[-1]) if lm_losses else 0.0,
+        "adapt_first": float(adapt_losses[0]) if adapt_losses else 0.0,
+        "adapt_last": float(adapt_losses[-1]) if adapt_losses else 0.0,
+        "synonym_cosine": synonym_cosine(lm, vocab, world),
+        "random_cosine": synonym_cosine(random_lm, vocab, world),
+    }
+
+    # --------------------------------------------------
+    # 4. Compare random, decoder-pretrained, and adapted
+    # initializations on lexical training pairs.
+    # --------------------------------------------------
+    init_results = {}
+    init_models = {}
+
+    initializations = [
+        ("random", None),
+        ("decoder", lm),
+        ("adapted", adapted),
+    ]
+
+    for name, initial_model in initializations:
+        model, losses = train_variant(
+            ex,
+            initial_model,
+            lexical,
+            seed=seed + 3,
+            steps=steps,
+            hard=False,
+        )
+
+        init_models[name] = model
+
+        init_results[name] = {
+            "syn": retrieval_eval(
+                model, vocab, corpus, eval_syn
+            ),
+            "lex": retrieval_eval(
+                model, vocab, corpus, eval_lex
+            ),
+        }
+
+    # --------------------------------------------------
+    # 5. Build the 20% semantic / 80% lexical training mix.
+    # --------------------------------------------------
+    mixed_pairs = mix_pairs(
+        lexical,
+        semantic,
+        0.2,
+        random.Random(seed + 5),
+        len(lexical),
+    )
+
+    # Use the same fixed oracle teacher for the complete variant.
+    teacher = OracleTeacher(world)
+
+    stack_results = {}
+    stack_models = {}
+
+    # A. In-batch negatives only.
+    model_inbatch, losses_inbatch = train_variant(
+        ex,
+        adapted,
+        mixed_pairs,
+        seed=seed + 6,
+        steps=steps,
+        hard=False,
+    )
+
+    stack_models["in-batch only"] = model_inbatch
+
+    stack_results["in-batch only"] = {
+        "syn": retrieval_eval(
+            model_inbatch, vocab, corpus, eval_syn
+        ),
+        "lex": retrieval_eval(
+            model_inbatch, vocab, corpus, eval_lex
+        ),
+        "loss_last": (
+            float(losses_inbatch[-1]) if losses_inbatch else 0.0
+        ),
+    }
+
+    # B. In-batch negatives and mined hard negatives.
+    model_hard, losses_hard = train_variant(
+        ex,
+        adapted,
+        mixed_pairs,
+        seed=seed + 6,
+        steps=steps,
+        hard=True,
+    )
+
+    stack_models["+ hard negatives"] = model_hard
+
+    stack_results["+ hard negatives"] = {
+        "syn": retrieval_eval(
+            model_hard, vocab, corpus, eval_syn
+        ),
+        "lex": retrieval_eval(
+            model_hard, vocab, corpus, eval_lex
+        ),
+        "loss_last": (
+            float(losses_hard[-1]) if losses_hard else 0.0
+        ),
+    }
+
+    # C. Hard negatives, spread-out regularization,
+    # Matryoshka loss, and oracle-teacher distillation.
+    model_full, losses_full = train_variant(
+        ex,
+        adapted,
+        mixed_pairs,
+        seed=seed + 6,
+        steps=steps,
+        hard=True,
+        dims=(16, 32),
+        lam_gor=0.1,
+        teacher=teacher,
+    )
+
+    stack_models["+ spread-out, MRL, distillation"] = model_full
+
+    stack_results["+ spread-out, MRL, distillation"] = {
+        "syn": retrieval_eval(
+            model_full, vocab, corpus, eval_syn
+        ),
+        "lex": retrieval_eval(
+            model_full, vocab, corpus, eval_lex
+        ),
+        "loss_last": (
+            float(losses_full[-1]) if losses_full else 0.0
+        ),
+    }
+
+    # --------------------------------------------------
+    # 6. Compare single-size and Matryoshka embeddings
+    # at dimensions 32, 16, and 8.
+    # --------------------------------------------------
+    mrl_results = {}
+
+    for name, model in [
+        ("single-size loss", model_hard),
+        ("Matryoshka loss", model_full),
+    ]:
+        dimension_results = {}
+
+        for dim in (32, 16, 8):
+            metrics = retrieval_eval(
+                model,
+                vocab,
+                corpus,
+                eval_syn,
+                dim=dim,
+            )
+
+            dimension_results[dim] = metrics["recall@1"]
+
+        mrl_results[name] = dimension_results
+
+    # --------------------------------------------------
+    # 7. Evaluate checkpoint interpolation (model soups).
+    # --------------------------------------------------
+    soup_results = {}
+
+    for alpha in (0.00, 0.25, 0.50, 0.75, 1.00):
+        interpolated = interpolate(
+            model_hard,
+            model_full,
+            alpha,
+        )
+
+        metrics = retrieval_eval(
+            interpolated,
+            vocab,
+            corpus,
+            eval_syn,
+        )
+
+        soup_results[f"alpha {alpha:.2f}"] = metrics["recall@1"]
+
+    # --------------------------------------------------
+    # 8. Evaluate int8, int4, and full-precision models.
+    # --------------------------------------------------
+    quant_results = {}
+
+    model_int8 = fake_quantize_model(model_full, bits=8)
+    model_int4 = fake_quantize_model(model_full, bits=4)
+
+    quant_results["int8"] = retrieval_eval(
+        model_int8, vocab, corpus, eval_syn
+    )["recall@1"]
+
+    quant_results["int4"] = retrieval_eval(
+        model_int4, vocab, corpus, eval_syn
+    )["recall@1"]
+
+    quant_results["float"] = retrieval_eval(
+        model_full, vocab, corpus, eval_syn
+    )["recall@1"]
+
+    # --------------------------------------------------
+    # 9. Return the complete experiment results.
+    # --------------------------------------------------
+    return {
+        "bm25": bm25_results,
+        "lm": lm_results,
+        "init": init_results,
+        "stack": stack_results,
+        "mrl": mrl_results,
+        "soup": soup_results,
+        "quant": quant_results,
+        "n_docs": n_docs,
+        "n_topics": n_topics,
+        "vocab": len(vocab),
+    }
+
