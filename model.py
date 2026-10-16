@@ -1765,3 +1765,122 @@ def fake_quantize_model(model, bits=8):
 
     return quantized_model
 
+# Step 21 - build_experiment
+def build_experiment(seed=0, docs_per_topic=30, per_doc=4):
+    # Set reproducible random seeds.
+    rng = random.Random(seed)
+    torch.manual_seed(seed)
+
+    # Build the synthetic world, corpus, and vocabulary.
+    world = make_world()
+    corpus = make_corpus(world, docs_per_topic, rng)
+    vocab = Vocab(world)
+
+    # Generate lexical queries using document vocabulary only.
+    lexical = make_pairs(
+        corpus,
+        world,
+        rng,
+        per_doc,
+        syn_rate=0.0,
+    )
+
+    # Generate semantic queries using synonyms.
+    semantic = make_pairs(
+        corpus,
+        world,
+        rng,
+        per_doc,
+        syn_rate=1.0,
+    )
+
+    # Use an independent random generator for evaluation queries.
+    eval_rng = random.Random(seed + 1000)
+
+    # One synonym-based query per document.
+    eval_syn = make_pairs(
+        corpus,
+        world,
+        eval_rng,
+        1,
+        syn_rate=1.0,
+    )
+
+    # One lexical query per document.
+    eval_lex = make_pairs(
+        corpus,
+        world,
+        eval_rng,
+        1,
+        syn_rate=0.0,
+    )
+
+    # Package the experiment data.
+    return {
+        "world": world,
+        "corpus": corpus,
+        "vocab": vocab,
+        "lexical": lexical,
+        "semantic": semantic,
+        "eval_syn": eval_syn,
+        "eval_lex": eval_lex,
+    }
+
+
+def pretrain_and_adapt(ex, lm_steps=300, adapt_steps=200, seed=0):
+    # Ensure reproducible model initialization.
+    torch.manual_seed(seed)
+
+    world = ex["world"]
+    vocab = ex["vocab"]
+
+    # Initialize a fresh causal language model.
+    lm = TinyLM(len(vocab))
+
+    # Pretrain on a generated document stream.
+    lm_losses = pretrain_lm(
+        lm,
+        world,
+        vocab,
+        lm_steps,
+        random.Random(seed + 1),
+    )
+
+    # Adapt a deep copy using bidirectional masked denoising.
+    adapted = copy.deepcopy(lm)
+
+    adapt_losses = adapt_encoder(
+        adapted,
+        world,
+        vocab,
+        adapt_steps,
+        random.Random(seed + 2),
+    )
+
+    return lm, adapted, lm_losses, adapt_losses
+
+
+def train_variant(ex, init, pairs, seed=3, steps=200, **kw):
+    # Reproduce model initialization and data sampling.
+    torch.manual_seed(seed)
+    rng = random.Random(seed)
+
+    # Start from a copied language model or a fresh embedder.
+    if init is not None:
+        model = Embedder.from_lm(init)
+    else:
+        model = Embedder.fresh(len(ex["vocab"]))
+
+    # Train the embedder using the requested loss configuration.
+    losses = train_embedder(
+        model,
+        pairs,
+        ex["corpus"],
+        ex["vocab"],
+        rng,
+        steps=steps,
+        **kw,
+    )
+
+    return model, losses
+

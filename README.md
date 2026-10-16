@@ -30,6 +30,7 @@ python scaffold.py
 - [x] **18.** uniform_soup
 - [x] **19.** retrieval_eval
 - [x] **20.** fake_quantize_model
+- [x] **21.** build_experiment
 
 ---
 
