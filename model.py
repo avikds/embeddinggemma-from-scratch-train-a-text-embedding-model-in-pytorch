@@ -9,36 +9,36 @@ import numpy as np
 # Step 1 - make_world
 TOPIC_WORDS = {
     "cooking": [
+        ("stove", "range"),
+        ("recipe", "formula"),
+        ("chef", "cook"),
         ("simmer", "stew"),
-        ("saute", "fry"),
-        ("whisk", "beat"),
-        ("grate", "shred"),
-        ("mince", "chop"),
-        ("sear", "brown"),
+        ("spice", "seasoning"),
+        ("skillet", "pan"),
     ],
     "astronomy": [
         ("telescope", "scope"),
-        ("planet", "world"),
-        ("orbit", "circuit"),
-        ("lunar", "moonlike"),
-        ("stellar", "cosmic"),
+        ("planet", "orb"),
+        ("orbit", "trajectory"),
+        ("lunar", "selenic"),
+        ("stellar", "celestial"),
         ("eclipse", "occultation"),
     ],
     "gardening": [
         ("prune", "trim"),
-        ("sow", "plant"),
+        ("sow", "seed"),
         ("irrigate", "water"),
         ("seedling", "sprout"),
-        ("cultivate", "tend"),
+        ("cultivate", "till"),
         ("fertilize", "enrich"),
     ],
     "chess": [
-        ("blunder", "mistake"),
-        ("checkmate", "mate"),
-        ("stalemate", "draw"),
-        ("gambit", "sacrifice"),
         ("knight", "horse"),
+        ("king", "monarch"),
+        ("gambit", "sacrifice"),
         ("rook", "castle"),
+        ("bishop", "prelate"),
+        ("endgame", "finale"),
     ],
     "cycling": [
         ("bicycle", "bike"),
@@ -49,9 +49,9 @@ TOPIC_WORDS = {
         ("route", "course"),
     ],
     "pottery": [
-        ("kiln", "oven"),
-        ("clay", "earth"),
-        ("glaze", "coating"),
+        ("kiln", "furnace"),
+        ("clay", "loam"),
+        ("glaze", "enamel"),
         ("potter", "ceramist"),
         ("vase", "urn"),
         ("wheel", "turntable"),
@@ -76,7 +76,7 @@ TOPIC_WORDS = {
         ("stratum", "layer"),
         ("igneous", "volcanic"),
         ("fossil", "remnant"),
-        ("erosion", "wear"),
+        ("erosion", "abrasion"),
         ("quartz", "crystal"),
         ("magma", "lava"),
     ],
@@ -106,140 +106,67 @@ TOPIC_WORDS = {
     ],
 }
 
-# Exactly 60 unique entities.
-# "alder" is first and "ivy" is last for cyclic pairing.
 ENTITIES = [
-    "alder",
-    "birch",
-    "cedar",
-    "dogwood",
-    "elm",
-    "fir",
-    "ginkgo",
-    "hazel",
-    "juniper",
-    "kudzu",
-    "lilac",
-    "maple",
-    "nettle",
-    "oak",
-    "petunia",
-    "rose",
-    "spruce",
-    "tulip",
-    "willow",
-    "yarrow",
-    "zinnia",
-    "acacia",
-    "bamboo",
-    "clover",
-    "dahlia",
-    "elder",
-    "fern",
-    "gardenia",
-    "heather",
-    "iris",
-    "jasmine",
-    "lotus",
-    "magnolia",
-    "narcissus",
-    "orchid",
-    "peony",
-    "quince",
-    "rosemary",
-    "saffron",
-    "thyme",
-    "verbena",
-    "wisteria",
-    "yucca",
-    "amethyst",
-    "azure",
-    "beige",
-    "coral",
-    "crimson",
-    "indigo",
-    "ivory",
-    "jade",
-    "khaki",
-    "mauve",
-    "ochre",
-    "olive",
-    "sienna",
-    "teal",
-    "umber",
-    "vermilion",
-    "ivy",
+    "alder", "birch", "cedar", "dogwood", "elm", "fern",
+    "ginkgo", "hazel", "juniper", "kudzu", "lilac", "maple",
+    "nettle", "oak", "petunia", "rose", "spruce", "tulip",
+    "willow", "yarrow", "zinnia", "acacia", "bamboo", "clover",
+    "dahlia", "gorse", "fir", "gardenia", "heather", "iris",
+    "jasmine", "lotus", "magnolia", "narcissus", "orchid",
+    "peony", "quince", "rosemary", "saffron", "thyme",
+    "verbena", "wisteria", "yucca", "amethyst", "azure",
+    "beige", "coral", "crimson", "indigo", "ivory", "jade",
+    "khaki", "mauve", "ochre", "olive", "sienna", "teal",
+    "amber", "vermilion", "ivy",
 ]
 
 FILLER = [
-    "the",
-    "and",
-    "or",
-    "but",
-    "if",
-    "then",
-    "with",
-    "from",
-    "into",
-    "near",
-    "about",
-    "for",
+    "the", "and", "or", "but", "if", "notes",
+    "guide", "report", "into", "of", "near", "for",
 ]
 
 SPECIAL = ["[PAD]", "[Q]", "[D]", "[MASK]"]
 
 
 def make_world():
-    # Preserve the topic order defined in TOPIC_WORDS.
     topics = list(TOPIC_WORDS.keys())
 
-    # Extract the six document words for each topic.
     words = {
         topic: [word for word, synonym in pairs]
         for topic, pairs in TOPIC_WORDS.items()
     }
 
-    # Map each document word to its unique synonym.
     synonyms = {
         word: synonym
         for pairs in TOPIC_WORDS.values()
         for word, synonym in pairs
     }
 
-    # Pair every entity with the next entity cyclically.
-    # The final entity, ivy, is paired with the first, alder.
     partners = {
         entity: ENTITIES[(i + 1) % len(ENTITIES)]
         for i, entity in enumerate(ENTITIES)
     }
 
-    # Validate topic and vocabulary counts.
+    # Validate topic structure and counts.
     assert len(topics) == 12
     assert all(len(TOPIC_WORDS[t]) == 6 for t in topics)
-    assert len(words) == 12
     assert len(synonyms) == 72
     assert len(ENTITIES) == 60
     assert len(FILLER) == 12
-    assert len(SPECIAL) == 4
 
-    # Validate the number of topic words and synonyms.
+    # Every word, synonym, entity, and filler must be unique.
     topic_terms = [
         term
         for pairs in TOPIC_WORDS.values()
         for pair in pairs
         for term in pair
     ]
-    assert len(topic_terms) == 144
 
-    # All document words, synonyms, entities, and filler
-    # words must be pairwise distinct.
     all_tokens = topic_terms + ENTITIES + FILLER
+
+    assert len(topic_terms) == 144
     assert len(all_tokens) == 216
     assert len(set(all_tokens)) == 216
-
-    # Confirm the required cyclic entity relationships.
-    assert partners["alder"] == "birch"
-    assert partners["ivy"] == "alder"
 
     return {
         "topics": topics,
@@ -249,4 +176,112 @@ def make_world():
         "filler": FILLER,
         "partners": partners,
     }
+
+# Step 2 - make_document
+import random
+
+def make_document(world, rng, topic, entities, syn_rate=0.0):
+    # Select two topic words for the document title.
+    title = rng.sample(world["words"][topic], 2)
+
+    # Build the body from the title, three additional topic words,
+    # the supplied entities, and two distinct filler words.
+    body = (
+        title.copy()
+        + [rng.choice(world["words"][topic]) for _ in range(3)]
+        + list(entities)
+        + rng.sample(world["filler"], 2)
+    )
+
+    # Shuffle the body while keeping the title prefix unchanged.
+    rng.shuffle(body)
+
+    # The title is repeated at the beginning of the body.
+    # With two entities, the final token list contains 11 tokens.
+    tokens = title + body
+
+    # Replace topic words with their synonyms probabilistically.
+    # Consume one rng.random() draw per topic-word token, in order.
+    for i, token in enumerate(tokens):
+        if token in world["synonyms"]:
+            if rng.random() < syn_rate:
+                tokens[i] = world["synonyms"][token]
+
+    return {
+        "topic": topic,
+        "entities": list(entities),
+        "title": tokens[:2],
+        "tokens": tokens,
+    }
+
+
+def make_corpus(world, docs_per_topic, rng):
+    documents = []
+
+    # Generate documents in the original topic order.
+    for topic in world["topics"]:
+        # Shuffle a fresh copy of the entity list for this topic.
+        ents = list(world["entities"])
+        rng.shuffle(ents)
+
+        # Assign two distinct entities to each document.
+        for k in range(docs_per_topic):
+            doc_entities = sorted(ents[2 * k:2 * k + 2])
+
+            # Corpus documents use the original document vocabulary.
+            document = make_document(
+                world,
+                rng,
+                topic,
+                doc_entities,
+                syn_rate=0.0,
+            )
+
+            # Assign sequential IDs starting from zero.
+            document["id"] = len(documents)
+            documents.append(document)
+
+    return documents
+
+
+def pretraining_stream(
+    world,
+    rng,
+    n,
+    syn_rate=0.3,
+    partner_rate=0.8,
+):
+    documents = []
+
+    for _ in range(n):
+        # Required random draw order: topic, entity, partner decision.
+        topic = rng.choice(world["topics"])
+        entity = rng.choice(world["entities"])
+
+        # Make the partner decision even when partner_rate is 0 or 1.
+        use_partner = rng.random() < partner_rate
+
+        if use_partner:
+            second_entity = world["partners"][entity]
+        else:
+            # Select a different entity from the first one.
+            other_entities = [
+                candidate
+                for candidate in world["entities"]
+                if candidate != entity
+            ]
+            second_entity = rng.choice(other_entities)
+
+        # Allow synonym replacement during pretraining.
+        document = make_document(
+            world,
+            rng,
+            topic,
+            [entity, second_entity],
+            syn_rate=syn_rate,
+        )
+
+        documents.append(document)
+
+    return documents
 
