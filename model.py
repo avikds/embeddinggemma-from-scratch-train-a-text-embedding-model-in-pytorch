@@ -1043,3 +1043,67 @@ class Embedder(nn.Module):
         # Return normalized embeddings with shape (B, d_out).
         return self.forward(ids, mask)
 
+# Step 12 - contrastive_loss
+def duplicate_mask(doc_ids):
+    # Return a boolean (B, B) matrix.
+    # True indicates a duplicate document that must not be
+    # treated as an in-batch negative.
+    doc_ids = torch.as_tensor(doc_ids)
+
+    same_document = doc_ids[:, None] == doc_ids[None, :]
+
+    # A sample must never be marked as its own duplicate.
+    diagonal = torch.eye(
+        len(doc_ids),
+        dtype=torch.bool,
+        device=doc_ids.device,
+    )
+
+    return same_document & ~diagonal
+
+
+def contrastive_loss(q, p, n=None, tau=0.05, alpha=5.0, dup=None):
+    # Normalize embeddings so dot products represent cosine similarity.
+    q = torch.nn.functional.normalize(q, p=2, dim=-1)
+    p = torch.nn.functional.normalize(p, p=2, dim=-1)
+
+    B = q.shape[0]
+
+    # In-batch query-positive similarity matrix.
+    logits = (q @ p.T) / tau
+
+    # Mask duplicate documents among in-batch candidates.
+    # The diagonal remains unmasked because it contains positives.
+    if dup is not None:
+        dup = torch.as_tensor(
+            dup,
+            dtype=torch.bool,
+            device=logits.device,
+        )
+        logits = logits.masked_fill(dup, float("-inf"))
+
+    # Optionally append mined hard negatives.
+    if n is not None:
+        n = torch.nn.functional.normalize(n, p=2, dim=-1)
+
+        # Similarities between every query and every hard negative.
+        hard_logits = (q @ n.T) / tau
+
+        # Detached similarity of each query to its own hard negative.
+        own_sim = (q * n).sum(dim=-1).detach()
+
+        # Reweight each own-hard-negative term by exp(alpha * own_sim).
+        # Adding its log-weight to the logit implements this weighting.
+        indices = torch.arange(B, device=q.device)
+        hard_logits[indices, indices] += alpha * own_sim
+
+        # Candidate columns now contain positives, in-batch candidates,
+        # and mined hard negatives.
+        logits = torch.cat([logits, hard_logits], dim=1)
+
+    # The correct positive for query i is candidate i.
+    targets = torch.arange(B, device=logits.device)
+
+    # InfoNCE cross-entropy over all candidate documents.
+    return torch.nn.functional.cross_entropy(logits, targets)
+

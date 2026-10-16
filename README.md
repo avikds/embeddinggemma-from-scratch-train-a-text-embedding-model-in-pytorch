@@ -21,6 +21,7 @@ python scaffold.py
 - [x] **9.** pretrain_lm
 - [x] **10.** adapt_encoder
 - [x] **11.** Embedder
+- [x] **12.** contrastive_loss
 
 ---
 
