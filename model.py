@@ -679,3 +679,96 @@ class TransformerBlock(nn.Module):
 
         return x
 
+# Step 8 - TinyLM
+class TinyLM(nn.Module):
+    def __init__(
+        self,
+        vocab_size,
+        d=64,
+        n_layers=2,
+        n_heads=4,
+        d_ff=128,
+        max_len=16,
+    ):
+        super().__init__()
+
+        self.d = d
+        self.max_len = max_len
+
+        # Token embeddings, initialized with a small normal distribution.
+        self.tok = nn.Embedding(vocab_size, d)
+        nn.init.normal_(self.tok.weight, mean=0.0, std=0.02)
+
+        # Learned positional embeddings.
+        self.pos = nn.Embedding(max_len, d)
+
+        # Stack of Transformer blocks.
+        self.blocks = nn.ModuleList([
+            TransformerBlock(d, n_heads, d_ff)
+            for _ in range(n_layers)
+        ])
+
+        # Final RMS normalization.
+        self.norm = RMSNorm(d)
+
+    def hidden(self, ids, allowed):
+        # ids has shape (B, T).
+        B, T = ids.shape
+
+        # Embed tokens and scale by sqrt(d).
+        x = self.tok(ids) * (self.d ** 0.5)
+
+        # Add positional embeddings.
+        positions = torch.arange(T, device=ids.device)
+        x = x + self.pos(positions).unsqueeze(0)
+
+        # Apply every Transformer block with the supplied mask.
+        for block in self.blocks:
+            x = block(x, allowed)
+
+        # Return normalized hidden states of shape (B, T, d).
+        return self.norm(x)
+
+    def forward(self, ids):
+        # Construct the causal attention mask for the sequence.
+        T = ids.shape[1]
+        allowed = causal_allowed(T).to(device=ids.device)
+
+        # Compute causal hidden states.
+        h = self.hidden(ids, allowed)
+
+        # Tie the output projection weights to the token embedding.
+        # Output shape: (B, T, vocab_size).
+        logits = h @ self.tok.weight.T
+
+        return logits
+
+    def lm_loss(self, ids, mask):
+        # Predict each token from the preceding tokens.
+        # Input: ids[:, :-1]; targets: ids[:, 1:].
+        inputs = ids[:, :-1]
+        targets = ids[:, 1:]
+
+        logits = self.forward(inputs)
+
+        # Only positions whose target tokens are real tokens
+        # contribute to the next-token prediction loss.
+        valid = mask[:, 1:].to(
+            device=logits.device,
+            dtype=torch.bool,
+        )
+
+        # Compute per-token cross-entropy without reduction.
+        losses = torch.nn.functional.cross_entropy(
+            logits.reshape(-1, logits.size(-1)),
+            targets.reshape(-1),
+            reduction="none",
+        ).reshape_as(targets)
+
+        # Average over valid target positions only.
+        valid_float = valid.to(dtype=losses.dtype)
+        loss_sum = (losses * valid_float).sum()
+        num_valid = valid_float.sum().clamp_min(1.0)
+
+        return loss_sum / num_valid
+

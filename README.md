@@ -17,6 +17,7 @@ python scaffold.py
 - [x] **5.** bm25_rank
 - [x] **6.** causal_allowed
 - [x] **7.** TransformerBlock
+- [x] **8.** TinyLM
 
 ---
 
