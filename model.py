@@ -178,27 +178,29 @@ def make_world():
 import random
 
 def make_document(world, rng, topic, entities, syn_rate=0.0):
-    # Select two topic words for the document title.
+    # Select two distinct topic words for the title.
     title = rng.sample(world["words"][topic], 2)
 
-    # Build the body from the title, three additional topic words,
-    # the supplied entities, and two distinct filler words.
+    # Construct the body from the title, three additional
+    # topic-word draws, the entities, and two filler words.
     body = (
         title.copy()
-        + [rng.choice(world["words"][topic]) for _ in range(3)]
+        + [
+            rng.choice(world["words"][topic])
+            for _ in range(3)
+        ]
         + list(entities)
         + rng.sample(world["filler"], 2)
     )
 
-    # Shuffle the body while keeping the title prefix unchanged.
+    # Shuffle only the body; the title stays at the beginning.
     rng.shuffle(body)
 
-    # The title is repeated at the beginning of the body.
-    # With two entities, the final token list contains 11 tokens.
+    # Combine title and body to create the token sequence.
     tokens = title + body
 
-    # Replace topic words with their synonyms probabilistically.
-    # Consume one rng.random() draw per topic-word token, in order.
+    # Replace topic words with synonyms probabilistically.
+    # Consume a random draw for every topic-word occurrence.
     for i, token in enumerate(tokens):
         if token in world["synonyms"]:
             if rng.random() < syn_rate:
@@ -215,17 +217,15 @@ def make_document(world, rng, topic, entities, syn_rate=0.0):
 def make_corpus(world, docs_per_topic, rng):
     documents = []
 
-    # Generate documents in the original topic order.
     for topic in world["topics"]:
-        # Shuffle a fresh copy of the entity list for this topic.
+        # Independently shuffle the entity list for each topic.
         ents = list(world["entities"])
         rng.shuffle(ents)
 
-        # Assign two distinct entities to each document.
         for k in range(docs_per_topic):
+            # Assign two distinct entities to each document.
             doc_entities = sorted(ents[2 * k:2 * k + 2])
 
-            # Corpus documents use the original document vocabulary.
             document = make_document(
                 world,
                 rng,
@@ -234,7 +234,7 @@ def make_corpus(world, docs_per_topic, rng):
                 syn_rate=0.0,
             )
 
-            # Assign sequential IDs starting from zero.
+            # Give every document a consecutive integer ID.
             document["id"] = len(documents)
             documents.append(document)
 
@@ -251,17 +251,17 @@ def pretraining_stream(
     documents = []
 
     for _ in range(n):
-        # Required random draw order: topic, entity, partner decision.
+        # Draw the topic and first entity.
         topic = rng.choice(world["topics"])
         entity = rng.choice(world["entities"])
 
-        # Make the partner decision even when partner_rate is 0 or 1.
+        # Decide whether to use the first entity's partner.
         use_partner = rng.random() < partner_rate
 
         if use_partner:
             second_entity = world["partners"][entity]
         else:
-            # Select a different entity from the first one.
+            # Choose another entity, excluding the first entity.
             other_entities = [
                 candidate
                 for candidate in world["entities"]
@@ -269,7 +269,6 @@ def pretraining_stream(
             ]
             second_entity = rng.choice(other_entities)
 
-        # Allow synonym replacement during pretraining.
         document = make_document(
             world,
             rng,
