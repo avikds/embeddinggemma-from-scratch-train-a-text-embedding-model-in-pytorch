@@ -1133,3 +1133,52 @@ def spread_out_loss(E):
     # Clamp at zero while preserving gradient flow.
     return torch.clamp(M2 - 1.0 / d, min=0.0)
 
+# Step 14 - mrl_loss
+def truncate_normalize(E, k):
+    # Keep the first k embedding dimensions and L2-normalize.
+    E_k = E[..., :k]
+    return torch.nn.functional.normalize(E_k, p=2, dim=-1)
+
+
+def mrl_loss(
+    q,
+    p,
+    n=None,
+    dims=(8, 16, 32),
+    tau=0.05,
+    alpha=5.0,
+    dup=None,
+    lam_gor=0.1,
+):
+    total_loss = q.new_zeros(())
+
+    # Apply the contrastive objective at each nested dimension.
+    for k in dims:
+        q_k = truncate_normalize(q, k)
+        p_k = truncate_normalize(p, k)
+
+        # Truncate hard-negative embeddings when supplied.
+        n_k = truncate_normalize(n, k) if n is not None else None
+
+        # Query-document contrastive loss at this dimension.
+        loss_k = contrastive_loss(
+            q_k,
+            p_k,
+            n=n_k,
+            tau=tau,
+            alpha=alpha,
+            dup=dup,
+        )
+
+        # Optionally encourage query and document embeddings
+        # to remain well distributed at this dimension.
+        if lam_gor > 0:
+            loss_k = loss_k + lam_gor * (
+                spread_out_loss(q_k) + spread_out_loss(p_k)
+            )
+
+        # Matryoshka loss is the sum over all requested dimensions.
+        total_loss = total_loss + loss_k
+
+    return total_loss
+
