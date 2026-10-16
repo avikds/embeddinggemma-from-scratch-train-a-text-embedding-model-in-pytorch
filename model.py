@@ -357,3 +357,73 @@ def mix_pairs(lexical, semantic, w_semantic, rng, n):
 
     return selected_semantic + selected_lexical
 
+# Step 4 - Vocab
+class Vocab:
+    def __init__(self, world):
+        # Special tokens must occupy the first four positions.
+        self.itos = list(SPECIAL)
+
+        # Add each topic word followed immediately by its synonym.
+        for topic in world["topics"]:
+            for word in world["words"][topic]:
+                self.itos.append(word)
+                self.itos.append(world["synonyms"][word])
+
+        # Add entities and filler words in their defined order.
+        self.itos.extend(world["entities"])
+        self.itos.extend(world["filler"])
+
+        # Build the token-to-index lookup table.
+        self.stoi = {
+            token: index
+            for index, token in enumerate(self.itos)
+        }
+
+        # Store the special-token IDs.
+        self.pad = self.stoi["[PAD]"]
+        self.q = self.stoi["[Q]"]
+        self.d = self.stoi["[D]"]
+        self.mask_id = self.stoi["[MASK]"]
+
+    def __len__(self):
+        return len(self.itos)
+
+    def encode(self, words, prefix):
+        # Query sequences receive [Q]; all other sequences receive [D].
+        prefix_id = self.q if prefix == "query" else self.d
+
+        # Return the prefix ID followed by the word IDs.
+        return [
+            prefix_id,
+            *[self.stoi[word] for word in words],
+        ]
+
+    def collate(self, seqs, max_len=16):
+        import torch
+
+        # T is the longest sequence, capped at max_len.
+        T = min(max((len(seq) for seq in seqs), default=0), max_len)
+
+        # Initialize padded token IDs and attention masks.
+        ids = torch.full(
+            (len(seqs), T),
+            self.pad,
+            dtype=torch.long,
+        )
+        mask = torch.zeros(
+            (len(seqs), T),
+            dtype=torch.long,
+        )
+
+        # Truncate each sequence and mark real tokens with 1.
+        for i, seq in enumerate(seqs):
+            seq = seq[:T]
+            if seq:
+                ids[i, :len(seq)] = torch.tensor(
+                    seq,
+                    dtype=torch.long,
+                )
+                mask[i, :len(seq)] = 1
+
+        return ids, mask
+

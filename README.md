@@ -13,6 +13,7 @@ python scaffold.py
 - [x] **1.** make_world
 - [x] **2.** make_document
 - [x] **3.** make_query
+- [x] **4.** Vocab
 
 ---
 
