@@ -575,3 +575,107 @@ def padding_allowed(mask):
     # attention heads and query positions.
     return mask[:, None, None, :].bool()
 
+# Step 7 - TransformerBlock
+class RMSNorm(nn.Module):
+    def __init__(self, d, eps=1e-6):
+        super().__init__()
+
+        # Learnable scale initialized to zero.
+        self.scale = nn.Parameter(torch.zeros(d))
+        self.eps = eps
+
+    def forward(self, x):
+        # Calculate the mean square in float32 for numerical stability.
+        x_float = x.float()
+        mean_square = x_float.pow(2).mean(dim=-1, keepdim=True)
+
+        # RMS normalization, followed by the learnable scale.
+        normalized = x_float * torch.rsqrt(mean_square + self.eps)
+        normalized = normalized * (1.0 + self.scale)
+
+        # Preserve the input tensor's dtype.
+        return normalized.to(dtype=x.dtype)
+
+
+class TransformerBlock(nn.Module):
+    def __init__(self, d, n_heads, d_ff):
+        super().__init__()
+
+        if d % n_heads != 0:
+            raise ValueError("d must be divisible by n_heads")
+
+        self.d = d
+        self.n_heads = n_heads
+        self.head_dim = d // n_heads
+        self.d_ff = d_ff
+
+        # Pre-normalization for attention.
+        self.norm1 = RMSNorm(d)
+
+        # Combined query, key, and value projection.
+        self.qkv = nn.Linear(d, 3 * d, bias=False)
+
+        # Attention output projection.
+        self.out = nn.Linear(d, d, bias=False)
+
+        # Pre-normalization for the feed-forward network.
+        self.norm2 = RMSNorm(d)
+
+        # Gated feed-forward projections.
+        self.gate = nn.Linear(d, d_ff, bias=False)
+        self.up = nn.Linear(d, d_ff, bias=False)
+        self.down = nn.Linear(d_ff, d, bias=False)
+
+    def forward(self, x, allowed):
+        B, T, D = x.shape
+
+        # -----------------------------------------------
+        # 1. Multi-head self-attention with pre-norm.
+        # -----------------------------------------------
+        h = self.norm1(x)
+
+        # Project to Q, K, V and separate the attention heads.
+        qkv = self.qkv(h)
+        qkv = qkv.reshape(
+            B, T, 3, self.n_heads, self.head_dim
+        )
+        qkv = qkv.permute(2, 0, 3, 1, 4)
+
+        q, k, v = qkv.unbind(dim=0)
+
+        # Scaled dot-product attention scores.
+        scores = (
+            q @ k.transpose(-2, -1)
+        ) * (self.head_dim ** -0.5)
+
+        # Prevent attention to disallowed key positions.
+        scores = scores.masked_fill(
+            ~allowed.bool(),
+            float("-inf"),
+        )
+
+        # Normalize attention scores and combine value vectors.
+        attn = torch.softmax(scores, dim=-1)
+        h = attn @ v
+
+        # Merge attention heads back into the model dimension.
+        h = h.transpose(1, 2).contiguous().reshape(B, T, D)
+
+        # Attention output projection and residual connection.
+        x = x + self.out(h)
+
+        # -----------------------------------------------
+        # 2. Gated GELU feed-forward network with pre-norm.
+        # -----------------------------------------------
+        h = self.norm2(x)
+
+        # Apply GELU to the gate branch and multiply elementwise
+        # by the up-projection branch.
+        gated = torch.nn.functional.gelu(self.gate(h))
+        up = self.up(h)
+
+        # Project back to the model dimension and add residual.
+        x = x + self.down(gated * up)
+
+        return x
+
