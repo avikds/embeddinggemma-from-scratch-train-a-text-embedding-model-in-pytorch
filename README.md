@@ -18,6 +18,7 @@ python scaffold.py
 - [x] **6.** causal_allowed
 - [x] **7.** TransformerBlock
 - [x] **8.** TinyLM
+- [x] **9.** pretrain_lm
 
 ---
 

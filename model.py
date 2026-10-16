@@ -772,3 +772,96 @@ class TinyLM(nn.Module):
 
         return loss_sum / num_valid
 
+# Step 9 - pretrain_lm
+def pretrain_lm(
+    model,
+    world,
+    vocab,
+    steps,
+    rng,
+    batch_size=64,
+    lr=5e-4,
+    weight_decay=0.1,
+    syn_rate=0.3,
+):
+    # AdamW optimizer with the specified learning rate and weight decay.
+    optimizer = torch.optim.AdamW(
+        model.parameters(),
+        lr=lr,
+        weight_decay=weight_decay,
+    )
+
+    # Keep track of the training loss at every optimization step.
+    losses = []
+
+    # Determine the device on which the model resides.
+    device = next(model.parameters()).device
+
+    model.train()
+
+    for _ in range(steps):
+        # Generate a fresh batch of synthetic pretraining documents.
+        documents = pretraining_stream(
+            world,
+            rng,
+            batch_size,
+            syn_rate=syn_rate,
+        )
+
+        # Encode documents using the document task prefix.
+        sequences = [
+            vocab.encode(doc["tokens"], "doc")
+            for doc in documents
+        ]
+
+        # Pad the sequences and construct the attention mask.
+        ids, mask = vocab.collate(sequences)
+
+        ids = ids.to(device)
+        mask = mask.to(device)
+
+        # Compute the next-token prediction loss.
+        optimizer.zero_grad()
+        loss = model.lm_loss(ids, mask)
+
+        # Backpropagate and update model parameters.
+        loss.backward()
+        optimizer.step()
+
+        # Store each loss as a Python float.
+        losses.append(float(loss.detach().cpu().item()))
+
+    return losses
+
+
+def synonym_cosine(model, vocab, world):
+    # Compare each topic word's token embedding with its synonym.
+    similarities = []
+
+    # Embeddings do not need gradients for this evaluation.
+    with torch.no_grad():
+        embeddings = model.tok.weight
+
+        for topic in world["topics"]:
+            for word in world["words"][topic]:
+                synonym = world["synonyms"][word]
+
+                # Retrieve the vocabulary indices.
+                word_id = vocab.stoi[word]
+                synonym_id = vocab.stoi[synonym]
+
+                # Calculate cosine similarity between the two embeddings.
+                similarity = torch.nn.functional.cosine_similarity(
+                    embeddings[word_id].unsqueeze(0),
+                    embeddings[synonym_id].unsqueeze(0),
+                    dim=-1,
+                )
+
+                similarities.append(similarity.item())
+
+    # Return the mean similarity rounded to four decimal places.
+    if not similarities:
+        return 0.0
+
+    return round(sum(similarities) / len(similarities), 4)
+
