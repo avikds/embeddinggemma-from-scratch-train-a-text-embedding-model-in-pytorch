@@ -1425,3 +1425,184 @@ def sample_batch(
 
     return result
 
+# Step 17 - train_embedder
+def train_embedder(
+    model,
+    pairs,
+    corpus,
+    vocab,
+    rng,
+    steps=200,
+    batch_size=64,
+    lr=5e-3,
+    tau=0.05,
+    alpha=5.0,
+    hard=True,
+    dims=(32,),
+    lam_gor=0.0,
+    teacher=None,
+    lam_distill=1.0,
+):
+    # AdamW optimizer with the specified learning rate and weight decay.
+    optimizer = torch.optim.AdamW(
+        model.parameters(),
+        lr=lr,
+        weight_decay=0.01,
+    )
+
+    # Build the corpus indexes once for hard-negative mining.
+    index = index_corpus(corpus)
+
+    # Keep track of the loss at every optimization step.
+    losses = []
+
+    # Use the same device as the model parameters.
+    device = next(model.parameters()).device
+
+    model.train()
+
+    for _ in range(steps):
+        # Sample query-positive pairs and optional hard negatives.
+        batch = sample_batch(
+            pairs,
+            corpus,
+            vocab,
+            rng,
+            batch_size,
+            hard=hard,
+            index=index,
+        )
+
+        # Each sequence collection is represented as (ids, mask).
+        q_ids, q_mask = batch["q"]
+        p_ids, p_mask = batch["p"]
+
+        q_ids = q_ids.to(device)
+        q_mask = q_mask.to(device)
+        p_ids = p_ids.to(device)
+        p_mask = p_mask.to(device)
+
+        B = q_ids.shape[0]
+
+        # Prepare optional hard-negative sequences.
+        if hard and "n" in batch:
+            n_ids, n_mask = batch["n"]
+            n_ids = n_ids.to(device)
+            n_mask = n_mask.to(device)
+        else:
+            n_ids = None
+            n_mask = None
+
+        # Pad every sequence collection to a common length.
+        # This allows all embeddings to be computed in one forward pass.
+        lengths = [
+            q_ids.shape[1],
+            p_ids.shape[1],
+        ]
+
+        if n_ids is not None:
+            lengths.append(n_ids.shape[1])
+
+        max_len = max(lengths)
+
+        def pad_sequences(ids, mask):
+            pad_len = max_len - ids.shape[1]
+
+            if pad_len > 0:
+                ids = torch.nn.functional.pad(
+                    ids,
+                    (0, pad_len),
+                    value=vocab.pad,
+                )
+                mask = torch.nn.functional.pad(
+                    mask,
+                    (0, pad_len),
+                    value=0,
+                )
+
+            return ids, mask
+
+        q_ids, q_mask = pad_sequences(q_ids, q_mask)
+        p_ids, p_mask = pad_sequences(p_ids, p_mask)
+
+        ids_list = [q_ids, p_ids]
+        mask_list = [q_mask, p_mask]
+
+        if n_ids is not None:
+            n_ids, n_mask = pad_sequences(n_ids, n_mask)
+            ids_list.append(n_ids)
+            mask_list.append(n_mask)
+
+        # Concatenate queries, positives, and negatives into one batch.
+        all_ids = torch.cat(ids_list, dim=0)
+        all_masks = torch.cat(mask_list, dim=0)
+
+        optimizer.zero_grad()
+
+        # A single encoder forward pass for the complete batch.
+        all_embeddings = model(all_ids, all_masks)
+
+        # Split the embeddings back into their original groups.
+        q_emb = all_embeddings[:B]
+        p_emb = all_embeddings[B:2 * B]
+
+        if n_ids is not None:
+            n_emb = all_embeddings[2 * B:3 * B]
+        else:
+            n_emb = None
+
+        # Build the duplicate-document mask for in-batch negatives.
+        dup = duplicate_mask(batch["doc_ids"]).to(device)
+
+        # Matryoshka contrastive loss, including optional spread-out
+        # regularization and mined hard-negative reweighting.
+        loss = mrl_loss(
+            q_emb,
+            p_emb,
+            n=n_emb,
+            dims=dims,
+            tau=tau,
+            alpha=alpha,
+            dup=dup,
+            lam_gor=lam_gor,
+        )
+
+        # Optionally distill embeddings from the oracle teacher.
+        if teacher is not None and lam_distill != 0:
+            with torch.no_grad():
+                teacher_q = teacher.embed(
+                    batch["q_concepts"]
+                ).to(device)
+
+                teacher_p = teacher.embed(
+                    batch["p_concepts"]
+                ).to(device)
+
+            distill = (
+                distill_loss(q_emb, teacher_q)
+                + distill_loss(p_emb, teacher_p)
+            )
+
+            # Include hard-negative distillation when negatives exist.
+            if n_emb is not None:
+                with torch.no_grad():
+                    teacher_n = teacher.embed(
+                        batch["n_concepts"]
+                    ).to(device)
+
+                distill = distill + distill_loss(
+                    n_emb,
+                    teacher_n,
+                )
+
+            loss = loss + lam_distill * distill
+
+        # Backpropagation and parameter update.
+        loss.backward()
+        optimizer.step()
+
+        # Store the loss as a Python float.
+        losses.append(float(loss.detach().cpu().item()))
+
+    return losses
+

@@ -26,6 +26,7 @@ python scaffold.py
 - [x] **14.** mrl_loss
 - [x] **15.** OracleTeacher
 - [x] **16.** sample_batch
+- [x] **17.** train_embedder
 
 ---
 
