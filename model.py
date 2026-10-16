@@ -7,6 +7,11 @@ Assembled from your step-by-step solutions.
 import numpy as np
 
 # Step 1 - make_world
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
 TOPIC_WORDS = {
     "cooking": [
         ("stove", "range"),
