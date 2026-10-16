@@ -24,6 +24,7 @@ python scaffold.py
 - [x] **12.** contrastive_loss
 - [x] **13.** spread_out_loss
 - [x] **14.** mrl_loss
+- [x] **15.** OracleTeacher
 
 ---
 

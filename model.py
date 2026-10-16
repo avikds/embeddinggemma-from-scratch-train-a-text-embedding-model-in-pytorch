@@ -1182,3 +1182,75 @@ def mrl_loss(
 
     return total_loss
 
+# Step 15 - OracleTeacher
+class OracleTeacher:
+    def __init__(self, world, d_out=32, seed=0):
+        # Map each topic and entity to a unique index.
+        self.topics = {
+            topic: i
+            for i, topic in enumerate(world["topics"])
+        }
+
+        self.entities = {
+            entity: i
+            for i, entity in enumerate(world["entities"])
+        }
+
+        self.n_topics = len(self.topics)
+        self.n_entities = len(self.entities)
+        self.d_out = d_out
+
+        # Create a reproducible random projection matrix.
+        generator = torch.Generator()
+        generator.manual_seed(seed)
+
+        self.R = torch.randn(
+            self.n_topics + self.n_entities,
+            d_out,
+            generator=generator,
+        )
+
+    def embed(self, items):
+        # Create one multi-hot feature vector per item.
+        # Each item contains (topic, entities).
+        features = torch.zeros(
+            len(items),
+            self.n_topics + self.n_entities,
+            dtype=self.R.dtype,
+            device=self.R.device,
+        )
+
+        for i, (topic, entities) in enumerate(items):
+            # Activate the topic feature.
+            features[i, self.topics[topic]] = 1.0
+
+            # Activate the features of the associated entities.
+            for entity in entities:
+                entity_index = self.n_topics + self.entities[entity]
+                features[i, entity_index] = 1.0
+
+        # Project the multi-hot features into the teacher embedding space.
+        embeddings = features @ self.R
+
+        # L2-normalize each embedding.
+        return torch.nn.functional.normalize(
+            embeddings,
+            p=2,
+            dim=-1,
+        )
+
+
+def distill_loss(student, teacher):
+    # Stop gradients from flowing into the teacher embeddings.
+    teacher = teacher.detach()
+
+    # Compute cosine similarity for corresponding embedding rows.
+    similarities = torch.nn.functional.cosine_similarity(
+        student,
+        teacher,
+        dim=-1,
+    )
+
+    # Minimize the mean cosine distance.
+    return (1.0 - similarities).mean()
+
