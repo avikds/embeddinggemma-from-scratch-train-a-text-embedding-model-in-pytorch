@@ -1664,3 +1664,75 @@ def interpolate(base, ft, alpha):
 
     return result
 
+# Step 19 - retrieval_eval
+@torch.no_grad()
+def retrieval_eval(model, vocab, corpus, pairs, dim=None, k=10):
+    # Remember the original training mode.
+    was_training = model.training
+    model.eval()
+
+    device = next(model.parameters()).device
+
+    try:
+        # Encode every document with the document prefix.
+        doc_sequences = [
+            vocab.encode(doc["tokens"], "doc")
+            for doc in corpus
+        ]
+
+        doc_ids, doc_mask = vocab.collate(doc_sequences)
+        doc_ids = doc_ids.to(device)
+        doc_mask = doc_mask.to(device)
+
+        # Embed all documents.
+        doc_embeddings = model(doc_ids, doc_mask)
+
+        # Optionally truncate to a Matryoshka dimension.
+        if dim is not None:
+            doc_embeddings = truncate_normalize(
+                doc_embeddings, dim
+            )
+
+        # Encode every query with the query prefix.
+        query_sequences = [
+            vocab.encode(query_words, "query")
+            for query_words, _ in pairs
+        ]
+
+        query_ids, query_mask = vocab.collate(query_sequences)
+        query_ids = query_ids.to(device)
+        query_mask = query_mask.to(device)
+
+        # Embed all queries.
+        query_embeddings = model(query_ids, query_mask)
+
+        # Apply the same truncation to query embeddings.
+        if dim is not None:
+            query_embeddings = truncate_normalize(
+                query_embeddings, dim
+            )
+
+        # Cosine similarities because embeddings are normalized.
+        scores = query_embeddings @ doc_embeddings.T
+
+        # Rank documents by descending score, breaking ties
+        # by ascending document index for stable results.
+        ranked_lists = []
+        score_rows = scores.cpu().tolist()
+
+        for row in score_rows:
+            ranked = sorted(
+                range(len(corpus)),
+                key=lambda idx: (-row[idx], idx),
+            )
+            ranked_lists.append(ranked[:max(k, 10)])
+
+        # The relevant document ID is the second element of each pair.
+        truths = [doc_id for _, doc_id in pairs]
+
+        return ranking_metrics(ranked_lists, truths, k=k)
+
+    finally:
+        # Restore the model's original training/evaluation mode.
+        model.train(was_training)
+
