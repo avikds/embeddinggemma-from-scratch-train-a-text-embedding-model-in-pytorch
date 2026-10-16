@@ -27,6 +27,7 @@ python scaffold.py
 - [x] **15.** OracleTeacher
 - [x] **16.** sample_batch
 - [x] **17.** train_embedder
+- [x] **18.** uniform_soup
 
 ---
 

@@ -1606,3 +1606,61 @@ def train_embedder(
 
     return losses
 
+# Step 18 - uniform_soup
+def uniform_soup(models):
+    # Start with a deep copy of the first model.
+    soup = copy.deepcopy(models[0])
+
+    # Average corresponding parameters and buffers across all models.
+    state_dicts = [model.state_dict() for model in models]
+    averaged_state = {}
+
+    with torch.no_grad():
+        for key in state_dicts[0]:
+            first_value = state_dicts[0][key]
+
+            # Floating-point tensors are averaged uniformly.
+            if torch.is_floating_point(first_value):
+                average = torch.stack(
+                    [state[key].to(first_value.device) for state in state_dicts],
+                    dim=0,
+                ).mean(dim=0)
+                averaged_state[key] = average.to(dtype=first_value.dtype)
+            else:
+                # Non-floating entries, such as integer counters,
+                # retain the value from the first model.
+                averaged_state[key] = first_value.clone()
+
+        soup.load_state_dict(averaged_state)
+
+    return soup
+
+
+def interpolate(base, ft, alpha):
+    # Create an independent copy of the base model.
+    result = copy.deepcopy(base)
+
+    base_state = base.state_dict()
+    ft_state = ft.state_dict()
+    interpolated_state = {}
+
+    with torch.no_grad():
+        for key, base_value in base_state.items():
+            ft_value = ft_state[key].to(base_value.device)
+
+            if torch.is_floating_point(base_value):
+                value = (
+                    (1.0 - alpha) * base_value
+                    + alpha * ft_value
+                )
+                interpolated_state[key] = value.to(
+                    dtype=base_value.dtype
+                )
+            else:
+                # Preserve non-floating state from the base model.
+                interpolated_state[key] = base_value.clone()
+
+        result.load_state_dict(interpolated_state)
+
+    return result
+
