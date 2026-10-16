@@ -281,3 +281,79 @@ def pretraining_stream(
 
     return documents
 
+# Step 3 - make_query
+def make_query(doc, world, rng, syn_rate):
+    # Collect the sorted, unique topic words appearing in the document.
+    topic_words = sorted(
+        set(doc["tokens"]) & set(world["words"][doc["topic"]])
+    )
+
+    # Draw one or two topic words.
+    k = rng.randint(1, 2)
+    selected = rng.sample(topic_words, min(k, len(topic_words)))
+
+    # Replace selected topic words with synonyms probabilistically.
+    query_words = []
+    for word in selected:
+        if rng.random() < syn_rate:
+            query_words.append(world["synonyms"][word])
+        else:
+            query_words.append(word)
+
+    # Add one entity from the document.
+    query_words.append(rng.choice(doc["entities"]))
+
+    # With probability 0.5, append one filler word.
+    if rng.random() < 0.5:
+        query_words.append(rng.choice(world["filler"]))
+
+    # Shuffle the final query.
+    rng.shuffle(query_words)
+
+    return query_words
+
+
+def make_pairs(corpus, world, rng, per_doc, syn_rate):
+    pairs = []
+
+    # Generate queries for each document in corpus order.
+    for doc in corpus:
+        for _ in range(per_doc):
+            query_words = make_query(
+                doc,
+                world,
+                rng,
+                syn_rate,
+            )
+            pairs.append((query_words, doc["id"]))
+
+    return pairs
+
+
+def make_title_pairs(corpus):
+    # Use each document's title as a query paired with its ID.
+    return [
+        (doc["title"][:], doc["id"])
+        for doc in corpus
+    ]
+
+
+def mix_pairs(lexical, semantic, w_semantic, rng, n):
+    # Work on copies so the input lists remain unchanged.
+    lexical_pool = list(lexical)
+    semantic_pool = list(semantic)
+
+    # Shuffle both pools independently.
+    rng.shuffle(lexical_pool)
+    rng.shuffle(semantic_pool)
+
+    # Determine the number of semantic pairs.
+    n_semantic = round(w_semantic * n)
+    n_lexical = n - n_semantic
+
+    # Select semantic pairs first, then lexical pairs.
+    selected_semantic = semantic_pool[:n_semantic]
+    selected_lexical = lexical_pool[:n_lexical]
+
+    return selected_semantic + selected_lexical
+
