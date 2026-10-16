@@ -14,6 +14,7 @@ python scaffold.py
 - [x] **2.** make_document
 - [x] **3.** make_query
 - [x] **4.** Vocab
+- [x] **5.** bm25_rank
 
 ---
 

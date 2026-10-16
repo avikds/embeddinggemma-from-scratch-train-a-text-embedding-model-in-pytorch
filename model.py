@@ -427,3 +427,135 @@ class Vocab:
 
         return ids, mask
 
+# Step 5 - bm25_rank
+import math
+from collections import Counter
+
+
+def bm25_index(corpus):
+    # Number of documents.
+    n = len(corpus)
+
+    # Token counts for each document.
+    tf = [Counter(doc["tokens"]) for doc in corpus]
+
+    # Document frequency: number of documents containing each token.
+    df = Counter()
+    for doc_tf in tf:
+        for token in doc_tf:
+            df[token] += 1
+
+    # Average document length.
+    avg_len = (
+        sum(sum(doc_tf.values()) for doc_tf in tf) / n
+        if n else 0.0
+    )
+
+    return {
+        "n": n,
+        "df": dict(df),
+        "avg_len": avg_len,
+        "tf": tf,
+    }
+
+
+def bm25_rank(query_words, corpus, index=None, k1=1.5, b=0.75):
+    # Build the index if one was not supplied.
+    if index is None:
+        index = bm25_index(corpus)
+
+    n = index["n"]
+    df = index["df"]
+    avg_len = index["avg_len"]
+    tf = index["tf"]
+
+    scores = []
+
+    for doc_index, doc in enumerate(corpus):
+        doc_tf = tf[doc_index]
+        doc_len = sum(doc_tf.values())
+        score = 0.0
+
+        for token in query_words:
+            frequency = doc_tf.get(token, 0)
+
+            # Only score query terms occurring in this document.
+            if frequency == 0:
+                continue
+
+            document_frequency = df.get(token, 0)
+
+            # BM25 inverse document frequency.
+            idf = math.log(
+                1.0
+                + (n - document_frequency + 0.5)
+                / (document_frequency + 0.5)
+            )
+
+            # BM25 term-frequency normalization.
+            denominator = frequency + k1 * (
+                1.0 - b
+                + b * doc_len / avg_len
+                if avg_len > 0
+                else 1.0
+            )
+
+            score += idf * (
+                frequency * (k1 + 1.0) / denominator
+            )
+
+        scores.append((score, doc_index))
+
+    # Higher scores first; lower document indices break ties.
+    scores.sort(key=lambda item: (-item[0], item[1]))
+
+    return [doc_index for score, doc_index in scores]
+
+
+def ranking_metrics(ranked_lists, truths, k=10):
+    # Calculate recall@1, recall@5, and nDCG@10.
+    recall1 = 0.0
+    recall5 = 0.0
+    ndcg10 = 0.0
+
+    count = len(truths)
+
+    if count == 0:
+        return {
+            "recall@1": 0.0,
+            "recall@5": 0.0,
+            "ndcg@10": 0.0,
+        }
+
+    for ranked, truth in zip(ranked_lists, truths):
+        # Recall at rank 1.
+        if ranked and ranked[0] == truth:
+            recall1 += 1.0
+
+        # Recall within the first five results.
+        if truth in ranked[:5]:
+            recall5 += 1.0
+
+        # nDCG for one relevant document.
+        if truth in ranked[:k]:
+            rank = ranked.index(truth) + 1
+            ndcg10 += 1.0 / math.log2(rank + 1)
+
+    return {
+        "recall@1": round(recall1 / count, 4),
+        "recall@5": round(recall5 / count, 4),
+        "ndcg@10": round(ndcg10 / count, 4),
+    }
+
+
+def evaluate_ranker(rank_fn, pairs):
+    ranked_lists = []
+    truths = []
+
+    # Each pair contains (query_words, document_id).
+    for query_words, doc_id in pairs:
+        ranked_lists.append(rank_fn(query_words))
+        truths.append(doc_id)
+
+    return ranking_metrics(ranked_lists, truths)
+
