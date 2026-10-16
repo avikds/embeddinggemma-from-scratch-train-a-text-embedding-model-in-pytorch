@@ -1891,9 +1891,6 @@ def train_variant(ex, init, pairs, seed=3, steps=200, **kw):
 
 # Step 22 - embedding_experiment
 def embedding_experiment(seed=0, steps=200, lm_steps=300, adapt_steps=200):
-    # --------------------------------------------------
-    # 1. Build the corpus, vocabulary, and query datasets.
-    # --------------------------------------------------
     ex = build_experiment(seed=seed)
 
     world = ex["world"]
@@ -1908,27 +1905,18 @@ def embedding_experiment(seed=0, steps=200, lm_steps=300, adapt_steps=200):
     n_docs = len(corpus)
     n_topics = len(world["topics"])
 
-    # --------------------------------------------------
-    # 2. Evaluate the BM25 lexical-retrieval baseline.
-    # Build the index only once.
-    # --------------------------------------------------
+    # 1. BM25 baseline
     bm25_idx = bm25_index(corpus)
 
     def bm25_rank_fn(query_words):
-        return bm25_rank(
-            query_words,
-            corpus,
-            index=bm25_idx,
-        )
+        return bm25_rank(query_words, corpus, index=bm25_idx)
 
     bm25_results = {
         "syn": evaluate_ranker(bm25_rank_fn, eval_syn),
         "lex": evaluate_ranker(bm25_rank_fn, eval_lex),
     }
 
-    # --------------------------------------------------
-    # 3. Pretrain the language model and adapt the encoder.
-    # --------------------------------------------------
+    # 2. Pretraining and bidirectional adaptation
     lm, adapted, lm_losses, adapt_losses = pretrain_and_adapt(
         ex,
         lm_steps=lm_steps,
@@ -1936,7 +1924,6 @@ def embedding_experiment(seed=0, steps=200, lm_steps=300, adapt_steps=200):
         seed=seed,
     )
 
-    # Create an independently initialized random baseline LM.
     torch.manual_seed(seed + 1)
     random_lm = TinyLM(len(vocab))
 
@@ -1949,12 +1936,8 @@ def embedding_experiment(seed=0, steps=200, lm_steps=300, adapt_steps=200):
         "random_cosine": synonym_cosine(random_lm, vocab, world),
     }
 
-    # --------------------------------------------------
-    # 4. Compare random, decoder-pretrained, and adapted
-    # initializations on lexical training pairs.
-    # --------------------------------------------------
+    # 3. Compare model initializations
     init_results = {}
-    init_models = {}
 
     initializations = [
         ("random", None),
@@ -1972,20 +1955,12 @@ def embedding_experiment(seed=0, steps=200, lm_steps=300, adapt_steps=200):
             hard=False,
         )
 
-        init_models[name] = model
-
         init_results[name] = {
-            "syn": retrieval_eval(
-                model, vocab, corpus, eval_syn
-            ),
-            "lex": retrieval_eval(
-                model, vocab, corpus, eval_lex
-            ),
+            "syn": retrieval_eval(model, vocab, corpus, eval_syn),
+            "lex": retrieval_eval(model, vocab, corpus, eval_lex),
         }
 
-    # --------------------------------------------------
-    # 5. Build the 20% semantic / 80% lexical training mix.
-    # --------------------------------------------------
+    # 4. Mix lexical and semantic training pairs
     mixed_pairs = mix_pairs(
         lexical,
         semantic,
@@ -1994,13 +1969,10 @@ def embedding_experiment(seed=0, steps=200, lm_steps=300, adapt_steps=200):
         len(lexical),
     )
 
-    # Use the same fixed oracle teacher for the complete variant.
     teacher = OracleTeacher(world)
-
     stack_results = {}
-    stack_models = {}
 
-    # A. In-batch negatives only.
+    # In-batch negatives only
     model_inbatch, losses_inbatch = train_variant(
         ex,
         adapted,
@@ -2009,8 +1981,6 @@ def embedding_experiment(seed=0, steps=200, lm_steps=300, adapt_steps=200):
         steps=steps,
         hard=False,
     )
-
-    stack_models["in-batch only"] = model_inbatch
 
     stack_results["in-batch only"] = {
         "syn": retrieval_eval(
@@ -2024,7 +1994,7 @@ def embedding_experiment(seed=0, steps=200, lm_steps=300, adapt_steps=200):
         ),
     }
 
-    # B. In-batch negatives and mined hard negatives.
+    # In-batch and hard negatives
     model_hard, losses_hard = train_variant(
         ex,
         adapted,
@@ -2034,22 +2004,15 @@ def embedding_experiment(seed=0, steps=200, lm_steps=300, adapt_steps=200):
         hard=True,
     )
 
-    stack_models["+ hard negatives"] = model_hard
-
     stack_results["+ hard negatives"] = {
-        "syn": retrieval_eval(
-            model_hard, vocab, corpus, eval_syn
-        ),
-        "lex": retrieval_eval(
-            model_hard, vocab, corpus, eval_lex
-        ),
+        "syn": retrieval_eval(model_hard, vocab, corpus, eval_syn),
+        "lex": retrieval_eval(model_hard, vocab, corpus, eval_lex),
         "loss_last": (
             float(losses_hard[-1]) if losses_hard else 0.0
         ),
     }
 
-    # C. Hard negatives, spread-out regularization,
-    # Matryoshka loss, and oracle-teacher distillation.
+    # Full loss stack
     model_full, losses_full = train_variant(
         ex,
         adapted,
@@ -2062,24 +2025,15 @@ def embedding_experiment(seed=0, steps=200, lm_steps=300, adapt_steps=200):
         teacher=teacher,
     )
 
-    stack_models["+ spread-out, MRL, distillation"] = model_full
-
     stack_results["+ spread-out, MRL, distillation"] = {
-        "syn": retrieval_eval(
-            model_full, vocab, corpus, eval_syn
-        ),
-        "lex": retrieval_eval(
-            model_full, vocab, corpus, eval_lex
-        ),
+        "syn": retrieval_eval(model_full, vocab, corpus, eval_syn),
+        "lex": retrieval_eval(model_full, vocab, corpus, eval_lex),
         "loss_last": (
             float(losses_full[-1]) if losses_full else 0.0
         ),
     }
 
-    # --------------------------------------------------
-    # 6. Compare single-size and Matryoshka embeddings
-    # at dimensions 32, 16, and 8.
-    # --------------------------------------------------
+    # 5. Matryoshka recall at dimensions 32, 16, and 8
     mrl_results = {}
 
     for name, model in [
@@ -2096,14 +2050,16 @@ def embedding_experiment(seed=0, steps=200, lm_steps=300, adapt_steps=200):
                 eval_syn,
                 dim=dim,
             )
-
             dimension_results[dim] = metrics["recall@1"]
 
-        mrl_results[name] = dimension_results
+        # Return a list because scaffold.py accesses row[0], row[1], row[2].
+        mrl_results[name] = [
+            dimension_results[32],
+            dimension_results[16],
+            dimension_results[8],
+        ]
 
-    # --------------------------------------------------
-    # 7. Evaluate checkpoint interpolation (model soups).
-    # --------------------------------------------------
+    # 6. Model interpolation
     soup_results = {}
 
     for alpha in (0.00, 0.25, 0.50, 0.75, 1.00):
@@ -2122,29 +2078,23 @@ def embedding_experiment(seed=0, steps=200, lm_steps=300, adapt_steps=200):
 
         soup_results[f"alpha {alpha:.2f}"] = metrics["recall@1"]
 
-    # --------------------------------------------------
-    # 8. Evaluate int8, int4, and full-precision models.
-    # --------------------------------------------------
-    quant_results = {}
-
+    # 7. Quantization
     model_int8 = fake_quantize_model(model_full, bits=8)
     model_int4 = fake_quantize_model(model_full, bits=4)
 
-    quant_results["int8"] = retrieval_eval(
-        model_int8, vocab, corpus, eval_syn
-    )["recall@1"]
+    quant_results = {
+        "int8": retrieval_eval(
+            model_int8, vocab, corpus, eval_syn
+        )["recall@1"],
+        "int4": retrieval_eval(
+            model_int4, vocab, corpus, eval_syn
+        )["recall@1"],
+        "float": retrieval_eval(
+            model_full, vocab, corpus, eval_syn
+        )["recall@1"],
+    }
 
-    quant_results["int4"] = retrieval_eval(
-        model_int4, vocab, corpus, eval_syn
-    )["recall@1"]
-
-    quant_results["float"] = retrieval_eval(
-        model_full, vocab, corpus, eval_syn
-    )["recall@1"]
-
-    # --------------------------------------------------
-    # 9. Return the complete experiment results.
-    # --------------------------------------------------
+    # 8. Return experiment results
     return {
         "bm25": bm25_results,
         "lm": lm_results,
