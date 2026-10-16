@@ -1254,3 +1254,174 @@ def distill_loss(student, teacher):
     # Minimize the mean cosine distance.
     return (1.0 - similarities).mean()
 
+# Step 16 - sample_batch
+def index_corpus(corpus):
+    # Map each topic and entity to the document IDs associated with it.
+    by_topic = {}
+    by_entity = {}
+
+    for i, doc in enumerate(corpus):
+        doc_id = doc.get("id", i)
+
+        # Index the document by topic.
+        by_topic.setdefault(doc["topic"], []).append(doc_id)
+
+        # Index the document under each of its entities.
+        for entity in doc["entities"]:
+            by_entity.setdefault(entity, []).append(doc_id)
+
+    return by_topic, by_entity
+
+
+def hard_negative(doc, corpus, by_topic, by_entity, rng):
+    doc_id = doc.get(
+        "id",
+        next(i for i, item in enumerate(corpus) if item is doc),
+    )
+
+    # Candidates sharing the same topic, excluding the positive document.
+    same_topic = [
+        candidate_id
+        for candidate_id in by_topic.get(doc["topic"], [])
+        if candidate_id != doc_id
+    ]
+
+    # Select one of this document's entities and find documents
+    # sharing that entity, again excluding the positive document.
+    same_entity = []
+
+    if doc["entities"]:
+        entity = rng.choice(doc["entities"])
+        same_entity = [
+            candidate_id
+            for candidate_id in by_entity.get(entity, [])
+            if candidate_id != doc_id
+        ]
+
+    # Prefer the same-topic pool with probability 0.5;
+    # otherwise prefer the same-entity pool.
+    if rng.random() < 0.5:
+        candidates = same_topic if same_topic else same_entity
+    else:
+        candidates = same_entity if same_entity else same_topic
+
+    # If both pools are empty, fall back to every other document.
+    if not candidates:
+        candidates = [
+            item.get("id", i)
+            for i, item in enumerate(corpus)
+            if item.get("id", i) != doc_id
+        ]
+
+    # Return a document selected uniformly from the candidate pool.
+    if not candidates:
+        raise ValueError(
+            "Cannot select a hard negative when no other document exists."
+        )
+
+    return corpus[rng.choice(candidates)]
+
+
+def sample_batch(
+    pairs,
+    corpus,
+    vocab,
+    rng,
+    batch_size,
+    hard=True,
+    index=None,
+):
+    # Sample without replacement, using fewer pairs when necessary.
+    batch = rng.sample(pairs, min(batch_size, len(pairs)))
+
+    # Build the corpus indexes once unless they were supplied.
+    if index is None:
+        by_topic, by_entity = index_corpus(corpus)
+    else:
+        by_topic, by_entity = index
+
+    queries = []
+    positives = []
+    negatives = []
+
+    doc_ids = []
+    q_concepts = []
+    p_concepts = []
+    n_concepts = []
+
+    for query_words, positive_id in batch:
+        # Retrieve the positive document.
+        positive_doc = corpus[positive_id]
+
+        # Encode the query using the [Q] prefix.
+        queries.append(vocab.encode(query_words, "query"))
+
+        # Encode the positive document using the [D] prefix.
+        positives.append(
+            vocab.encode(positive_doc["tokens"], "doc")
+        )
+
+        doc_ids.append(positive_id)
+
+        # Query concepts include the topic and the document entities
+        # that actually appear in this query.
+        query_entities = [
+            entity
+            for entity in positive_doc["entities"]
+            if entity in query_words
+        ]
+
+        q_concepts.append(
+            (positive_doc["topic"], query_entities)
+        )
+
+        # Positive document concepts.
+        p_concepts.append(
+            (
+                positive_doc["topic"],
+                list(positive_doc["entities"]),
+            )
+        )
+
+        if hard:
+            # Mine a hard negative sharing the topic or an entity.
+            negative_doc = hard_negative(
+                positive_doc,
+                corpus,
+                by_topic,
+                by_entity,
+                rng,
+            )
+
+            # Encode the negative document using the [D] prefix.
+            negatives.append(
+                vocab.encode(negative_doc["tokens"], "doc")
+            )
+
+            # Record the negative document's semantic concepts.
+            n_concepts.append(
+                (
+                    negative_doc["topic"],
+                    list(negative_doc["entities"]),
+                )
+            )
+
+    # Collate query and positive sequences into (ids, mask) pairs.
+    q = vocab.collate(queries)
+    p = vocab.collate(positives)
+
+    result = {
+        "q": q,
+        "p": p,
+        "doc_ids": doc_ids,
+        "q_concepts": q_concepts,
+        "p_concepts": p_concepts,
+    }
+
+    # Include hard negatives only when requested.
+    if hard:
+        result["n"] = vocab.collate(negatives)
+        result["n_concepts"] = n_concepts
+
+    return result
+
