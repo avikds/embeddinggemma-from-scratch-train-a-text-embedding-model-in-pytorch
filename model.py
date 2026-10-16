@@ -559,3 +559,19 @@ def evaluate_ranker(rank_fn, pairs):
 
     return ranking_metrics(ranked_lists, truths)
 
+# Step 6 - causal_allowed
+def causal_allowed(T):
+    # Create a lower-triangular boolean attention mask.
+    # A query at position i may attend to keys at positions j <= i.
+    return torch.tril(
+        torch.ones((T, T), dtype=torch.bool)
+    )
+
+
+def padding_allowed(mask):
+    # Input mask has shape (B, T), with 1 for real tokens
+    # and 0 for padding tokens.
+    # Reshape to (B, 1, 1, T) for broadcasting across
+    # attention heads and query positions.
+    return mask[:, None, None, :].bool()
+
