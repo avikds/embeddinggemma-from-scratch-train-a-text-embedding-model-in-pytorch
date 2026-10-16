@@ -22,6 +22,7 @@ python scaffold.py
 - [x] **10.** adapt_encoder
 - [x] **11.** Embedder
 - [x] **12.** contrastive_loss
+- [x] **13.** spread_out_loss
 
 ---
 

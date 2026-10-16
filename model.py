@@ -1107,3 +1107,29 @@ def contrastive_loss(q, p, n=None, tau=0.05, alpha=5.0, dup=None):
     # InfoNCE cross-entropy over all candidate documents.
     return torch.nn.functional.cross_entropy(logits, targets)
 
+# Step 13 - spread_out_loss
+def spread_out_loss(E):
+    # E has shape (B, d) and contains unit-normalized embeddings.
+    B, d = E.shape
+
+    # For fewer than two embeddings, return a differentiable zero.
+    if B < 2:
+        return E.sum() * 0.0
+
+    # Compute the Gram matrix of pairwise dot products.
+    gram = E @ E.T
+
+    # Select only off-diagonal entries, excluding self-similarities.
+    off_diagonal = ~torch.eye(
+        B,
+        dtype=torch.bool,
+        device=E.device,
+    )
+
+    # Mean squared similarity over all ordered pairs i != j.
+    M2 = gram[off_diagonal].pow(2).mean()
+
+    # Penalize similarity exceeding the target 1/d.
+    # Clamp at zero while preserving gradient flow.
+    return torch.clamp(M2 - 1.0 / d, min=0.0)
+
