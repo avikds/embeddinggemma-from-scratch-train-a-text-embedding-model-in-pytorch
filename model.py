@@ -970,3 +970,76 @@ def adapt_encoder(
 
     return losses
 
+# Step 11 - Embedder
+import copy
+
+class Embedder(nn.Module):
+    def __init__(self, lm, d_out=32):
+        super().__init__()
+
+        # Store the TinyLM backbone.
+        self.lm = lm
+
+        # Project pooled hidden states into the embedding space.
+        self.proj = nn.Linear(lm.d, d_out, bias=False)
+
+    @staticmethod
+    def from_lm(lm, d_out=32):
+        # Deep-copy the language model so the original remains unchanged.
+        copied_lm = copy.deepcopy(lm)
+        return Embedder(copied_lm, d_out=d_out)
+
+    @staticmethod
+    def fresh(vocab_size, d_out=32, **kw):
+        # Create a new TinyLM from scratch and wrap it as an embedder.
+        lm = TinyLM(vocab_size, **kw)
+        return Embedder(lm, d_out=d_out)
+
+    def forward(self, ids, mask):
+        # ids and mask have shape (B, T).
+        # Ensure the mask is on the same device as the input IDs.
+        mask = mask.to(device=ids.device)
+
+        # Use bidirectional attention, masking only padding positions.
+        allowed = padding_allowed(mask)
+        hidden = self.lm.hidden(ids, allowed)
+
+        # Masked mean pooling over real tokens.
+        # hidden: (B, T, d)
+        # mask:   (B, T)
+        weights = mask.to(dtype=hidden.dtype).unsqueeze(-1)
+
+        pooled = (hidden * weights).sum(dim=1)
+        counts = weights.sum(dim=1).clamp_min(1.0)
+        pooled = pooled / counts
+
+        # Project pooled representations into the output space.
+        embeddings = self.proj(pooled)
+
+        # L2-normalize embeddings along the feature dimension.
+        embeddings = torch.nn.functional.normalize(
+            embeddings,
+            p=2,
+            dim=-1,
+        )
+
+        return embeddings
+
+    def embed_words(self, vocab, word_lists, prefix):
+        # Encode each word list with the requested task prefix.
+        sequences = [
+            vocab.encode(words, prefix)
+            for words in word_lists
+        ]
+
+        # Pad sequences and construct their attention masks.
+        ids, mask = vocab.collate(sequences)
+
+        # Place inputs on the same device as the model.
+        device = next(self.parameters()).device
+        ids = ids.to(device)
+        mask = mask.to(device)
+
+        # Return normalized embeddings with shape (B, d_out).
+        return self.forward(ids, mask)
+
