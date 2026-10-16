@@ -147,14 +147,6 @@ def make_world():
         for i, entity in enumerate(ENTITIES)
     }
 
-    # Validate topic structure and counts.
-    assert len(topics) == 12
-    assert all(len(TOPIC_WORDS[t]) == 6 for t in topics)
-    assert len(synonyms) == 72
-    assert len(ENTITIES) == 60
-    assert len(FILLER) == 12
-
-    # Every word, synonym, entity, and filler must be unique.
     topic_terms = [
         term
         for pairs in TOPIC_WORDS.values()
@@ -164,7 +156,12 @@ def make_world():
 
     all_tokens = topic_terms + ENTITIES + FILLER
 
+    assert len(topics) == 12
+    assert all(len(TOPIC_WORDS[t]) == 6 for t in topics)
     assert len(topic_terms) == 144
+    assert len(synonyms) == 72
+    assert len(ENTITIES) == 60
+    assert len(FILLER) == 12
     assert len(all_tokens) == 216
     assert len(set(all_tokens)) == 216
 
